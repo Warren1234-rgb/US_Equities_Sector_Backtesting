@@ -1,0 +1,39 @@
+# Python Virtual Environment
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Local Data Files (DO NOT PUSH)
+*.parquet
+*.csv
+*.tsv
+*.h5
+*.feather
+
+# Local IDE / OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Output plots
+*.png
+*.pdf
+*.log
+
+# Databases and Cache files
+*.sqlite
+*.sqlite3
+*.db
+*.xlsx
+results/
+history.txt
+
+# Databases, spreadsheets, and cache files
+*.sqlite
+*.sqlite3
+*.db
+*.xlsx
+results/
+history.txt
