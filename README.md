@@ -1,20 +1,17 @@
-Dataset
+<img width="1902" height="682" alt="image" src="https://github.com/user-attachments/assets/f2bd0c56-f2cb-4f14-b23e-14a0dd765412" />**Dataset**
 The dataset contained price (CRSP) and fundamental (Compustat) data for all active and delisted US Equities going back to the 1970s to 2026. Thus, it is survivorship bias free. 
 
 
-Model choice
+**Model choice**
 A ridge regression model is chosen to avoid overfitting. One model is built for each sector (which is defined as a SIC code range). 10 sectors are built. I think that smaller subsectors may perhaps even be better because there are enough data points (assume 5000 stocks, then 5000/10 = 500 data points each year).
 
 
-Model training
+**Model training**
 To generate a training example, an (X, Y) pair, I used data from the last 2 years, and the model predicts 1 year ahead. X contains fundamental data, such as past cash return on assets, change in gross margin, operating leverage, and also price data like the 12-2 momentum. 
 
-Model testing. 
+**Model testing** 
 I did a walk forward test. each decision in this test is made using the model trained on the last 10 years of training examples. 
 
 
-Quintile returns
-
-
-
+**Quintile returns**
 <img width="1902" height="682" alt="image" src="https://github.com/user-attachments/assets/014a7609-3254-47d4-b17f-c00cc619c801" />
