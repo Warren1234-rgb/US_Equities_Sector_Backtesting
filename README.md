@@ -4,6 +4,9 @@ The dataset contained price (CRSP) and fundamental (Compustat) data for all acti
 
 **Model choice**
 A ridge regression model is chosen to avoid overfitting. One model is built for each sector (which is defined as a SIC code range). 10 sectors are built. I think that smaller subsectors may perhaps even be better because there are enough data points (tbc)
+
+
+
 **Model training**
 To generate a training example, an (X, Y) pair, I used data from the last 2 years, and the model predicts 1 year ahead. X contains fundamental data, such as past cash return on assets, change in gross margin, operating leverage, and also price data like the 12-2 momentum. To prevent lookahead bias, when we are predicting the return from T to T+12 months, we use the fundamental data from a fiscal year that ended at before T-3, because companies take <90 days (mandated by the SEC) to release their reports after fiscal year end. 
 
