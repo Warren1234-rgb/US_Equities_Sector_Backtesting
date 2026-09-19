@@ -14,7 +14,7 @@ To generate a training example, an (X, Y) pair, I used data from the last 2 year
 A new model for built for each sector each January. The latest training example had its target return period end 1 month before January. 
 
 **Model testing** 
-I did a walk forward test.
+I did a walk forward test of the equal weighted portfolios of the five quintiles of predicted returns. The stocks are held for a year. If they become delisted, the delisting return from CRSP is applied and the portfolio rebalances to equal weight the other survivors. 
 
 
 **Quintile returns**
