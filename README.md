@@ -3,7 +3,7 @@ The dataset contained price (CRSP) and fundamental (Compustat) data for all acti
 
 
 **Model choice**
-A ridge regression model is chosen to avoid overfitting. One model is built for each sector (which is defined as a SIC code range). 10 sectors are built. I think that smaller subsectors may perhaps even be better because there are enough data points (tbc)
+A ridge regression model is chosen to avoid overfitting. One model is built for each sector (which is defined as a SIC code range). 10 sectors are built. 
 
 
 
