@@ -1,4 +1,4 @@
-<img width="1902" height="682" alt="image" src="https://github.com/user-attachments/assets/f2bd0c56-f2cb-4f14-b23e-14a0dd765412" />**Dataset**
+**Dataset**
 The dataset contained price (CRSP) and fundamental (Compustat) data for all active and delisted US Equities going back to the 1970s to 2026. Thus, it is survivorship bias free. 
 
 
