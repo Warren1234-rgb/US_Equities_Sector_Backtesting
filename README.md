@@ -8,7 +8,7 @@ A ridge regression model is chosen to avoid overfitting. One model is built for 
 
 
 **Feature engineering**
-To generate a training example, an (X, Y) pair, I used data from the last 2 years, and Y is the one year forward return. X contains fundamental data, such as past cash return on assets, change in gross margin, operating leverage, and also price data like the 12-2 momentum. To prevent lookahead bias, when we are predicting the return from T to T+12 months, we use the report from a fiscal year that ended at before T-3, and the one before that, because companies take <90 days (mandated by the SEC) to release their reports after fiscal year end. 
+To generate a training example, an (X, Y) pair, I used data from the last 2 years. Y was the cross sectional alpha (bounded between 0.5 and -0.5, 0 meaning that its return = the market (equal weighted) mean). X contains fundamental data, such as past cash return on assets, change in gross margin, operating leverage, and also price data like the 12-2 momentum. To prevent lookahead bias, when we are predicting the return from T to T+12 months, we use the report from a fiscal year that ended at before T-3, and the one before that, because companies take <90 days (mandated by the SEC) to release their reports after fiscal year end. 
 
 **Model Training**
 A new model for built for each sector each January. The latest training example had its target return period end 1 month before January. 
