@@ -20,8 +20,8 @@ A ridge regression model is chosen to avoid overfitting. One model is built for 
 
 **Feature engineering**
 Here are the features chosen. 
-| Feature |
-|:---|
+
+
 | Rule of 40 |
 | Cash ROA |
 | Δ Gross Margin |
