@@ -4,7 +4,18 @@ The dataset contained price (CRSP) and fundamental (Compustat) data for all acti
 
 **Model choice**
 A ridge regression model is chosen to avoid overfitting. One model is built for each sector (which is defined as a SIC code range). 10 sectors are built. 
-
+| Division | Sector | SIC Codes |
+|:---:|:---|:---:|
+| A | Agriculture, Forestry & Fishing | 0100–0999 |
+| B | Mining | 1000–1499 |
+| C | Construction | 1500–1799 |
+| D | Manufacturing | 2000–3999 |
+| E | Transportation, Communications & Utilities | 4000–4999 |
+| F | Wholesale Trade | 5000–5199 |
+| G | Retail Trade | 5200–5999 |
+| H | Finance, Insurance & Real Estate | 6000–6799 |
+| I | Services | 7000–8999 |
+| J | Public Administration | 9100–9999 |
 
 
 **Feature engineering**
@@ -30,3 +41,11 @@ I did a walk forward test of the equal weighted portfolios of the five quintiles
 | **EW Universe Benchmark** | **12.80%** | **18.36%** | **0.75** |
 | Q1 − Q5 Long/Short | 0.37% | 12.64% | 0.09 |
 | Q1 − Benchmark (Active) | 0.77% | 4.49% | 0.19 |
+
+**Feature Importances for the sectors**
+<img width="1531" height="1007" alt="11_ridge_coefficients_by_region" src="https://github.com/user-attachments/assets/4061e1a1-acf4-4cdb-98f5-8d31495f82b7" />
+
+**Rolling ICs**
+<img width="1465" height="618" alt="09_rank_ic_timeseries" src="https://github.com/user-attachments/assets/e0018c97-8a9a-4068-9c63-4a0c92a37920" />
+
+
