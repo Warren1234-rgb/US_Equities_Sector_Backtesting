@@ -60,23 +60,25 @@ I did a walk forward test of the equal weighted portfolios of the five quintiles
 
 
 **Quintile returns**
-<img width="1902" height="682" alt="image" src="https://github.com/user-attachments/assets/014a7609-3254-47d4-b17f-c00cc619c801" />
 
 | Bucket | CAGR | Ann. Vol | Sharpe |
 |:---|---:|---:|---:|
-| Q1 (Top 20% – Long) | 14.23% | 16.04% | 0.92 |
-| Q2 (60–80%) | 13.53% | 16.32% | 0.86 |
-| Q3 (40–60% Median) | 12.85% | 17.71% | 0.78 |
-| Q4 (20–40%) | 12.29% | 19.26% | 0.70 |
-| Q5 (Bottom 20% – Short) | 10.29% | 24.55% | 0.52 |
-| **EW Universe Benchmark** | **12.80%** | **18.36%** | **0.75** |
-| Q1 − Q5 Long/Short | 0.37% | 12.64% | 0.09 |
-| Q1 − Benchmark (Active) | 0.77% | 4.49% | 0.19 |
+| Q1 (Top 20% – Long) | 14.11% | 15.81% | 0.92 |
+| Q2 (60–80%) | 13.26% | 15.93% | 0.87 |
+| Q3 (40–60% Median) | 13.00% | 17.13% | 0.80 |
+| Q4 (20–40%) | 12.94% | 18.74% | 0.75 |
+| Q5 (Bottom 20% – Short) | 11.04% | 23.97% | 0.56 |
+| **EW Universe Benchmark** | **13.40%** | **17.78%** | **0.80** |
+
 
 **Feature Importances for the sectors**
-<img width="1531" height="1007" alt="11_ridge_coefficients_by_region" src="https://github.com/user-attachments/assets/4061e1a1-acf4-4cdb-98f5-8d31495f82b7" />
+These are the feature weights for each feature, using that feature only (univariate regression). 
+<img width="1529" height="667" alt="10_feature_ic" src="https://github.com/user-attachments/assets/fb1ee1b5-b770-4a4c-874d-afb0b62077ad" />
+
 
 **Rolling ICs**
-<img width="1465" height="618" alt="09_rank_ic_timeseries" src="https://github.com/user-attachments/assets/e0018c97-8a9a-4068-9c63-4a0c92a37920" />
+These are the Pearson correlations between the predicted and actual return (percentiles). ![Uploading 10_feature_ic.png…]()
+
+<img width="1465" height="618" alt="09_rank_ic_timeseries" src="https://github.com/user-attachments/assets/7cc1694a-6138-4700-a9e9-f0e11371d855" />
 
 
