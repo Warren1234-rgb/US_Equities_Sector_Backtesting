@@ -72,7 +72,7 @@ I did a walk forward test of the equal weighted portfolios of the five quintiles
 
 
 **Feature Importances for the sectors**
-These are the feature weights for each feature, using that feature only (univariate regression). 
+These are the ICs for each feature, using that feature only (univariate regression). 
 <img width="1529" height="667" alt="10_feature_ic" src="https://github.com/user-attachments/assets/fb1ee1b5-b770-4a4c-874d-afb0b62077ad" />
 
 
