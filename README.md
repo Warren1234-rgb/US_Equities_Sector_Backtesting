@@ -77,8 +77,7 @@ These are the feature weights for each feature, using that feature only (univari
 
 
 **Rolling ICs**
-These are the Pearson correlations between the predicted and actual return (percentiles). ![Uploading 10_feature_ic.png…]()
-
+These are the Pearson correlations between the predicted and actual return (percentiles). 
 <img width="1465" height="618" alt="09_rank_ic_timeseries" src="https://github.com/user-attachments/assets/7cc1694a-6138-4700-a9e9-f0e11371d855" />
 
 
