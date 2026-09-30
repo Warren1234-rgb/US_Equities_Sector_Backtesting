@@ -1,5 +1,5 @@
 **Dataset**
-The dataset contained price (CRSP) and fundamental (Compustat) data for all active and delisted US Equities going back to the 1970s to 2026. Thus, it is survivorship bias free. 
+The dataset contained price (CRSP) and fundamental (Compustat) data for all active and delisted US Equities going back to the 1970s to 2026. The dataset has (hopefully) no survivorship bias. 
 
 
 **Model choice**
