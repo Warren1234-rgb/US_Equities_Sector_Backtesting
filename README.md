@@ -19,3 +19,14 @@ I did a walk forward test of the equal weighted portfolios of the five quintiles
 
 **Quintile returns**
 <img width="1902" height="682" alt="image" src="https://github.com/user-attachments/assets/014a7609-3254-47d4-b17f-c00cc619c801" />
+
+| Bucket | CAGR | Ann. Vol | Sharpe |
+|:---|---:|---:|---:|
+| Q1 (Top 20% – Long) | 14.23% | 16.04% | 0.92 |
+| Q2 (60–80%) | 13.53% | 16.32% | 0.86 |
+| Q3 (40–60% Median) | 12.85% | 17.71% | 0.78 |
+| Q4 (20–40%) | 12.29% | 19.26% | 0.70 |
+| Q5 (Bottom 20% – Short) | 10.29% | 24.55% | 0.52 |
+| **EW Universe Benchmark** | **12.80%** | **18.36%** | **0.75** |
+| Q1 − Q5 Long/Short | 0.37% | 12.64% | 0.09 |
+| Q1 − Benchmark (Active) | 0.77% | 4.49% | 0.19 |
