@@ -19,7 +19,7 @@ A ridge regression model is chosen to avoid overfitting. One model is built for 
 
 
 **Feature engineering**
-To generate a training example, an (X, Y) pair, I used data from the last 2 years. Y was the alpha percentile. X contains fundamental data, such as past cash return on assets, change in gross margin, operating leverage, and also price data like the 12-2 momentum. To prevent lookahead bias, when we are predicting the return from T to T+12 months, we use the report from a fiscal year that ended at before T-3, and the one before that, because companies take <90 days (mandated by the SEC) to release their reports after fiscal year end. 
+Here are the features chosen. 
 | Feature |
 |:---|
 | Rule of 40 |
@@ -31,6 +31,8 @@ To generate a training example, an (X, Y) pair, I used data from the last 2 year
 | Net Buyback |
 | Momentum (12-2) |
 | Low Volatility |
+To prevent lookahead bias, when we are predicting the return from T to T+12 months, we use the report from a fiscal year that ended at before T-3, and the one before that, because companies take <90 days (mandated by the SEC) to release their reports after fiscal year end. 
+
 
 **Training example**
 | Feature | Sector Percentile |
