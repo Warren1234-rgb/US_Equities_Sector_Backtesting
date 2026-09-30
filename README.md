@@ -35,22 +35,20 @@ To generate a training example, an (X, Y) pair, I used data from the last 2 year
 *CFO = operating cash flow (net income used if missing); FCF = CFO − CapEx; FCF Margin = FCF / Revenue. Fundamentals are annual and lagged 90 days after fiscal year-end. Each feature is converted to a percentile rank within its SIC division each month before entering the model.*
 
 **Training example**
-| Column | Value | Meaning |
-|:---|---:|:---|
-| MTHCALDT | 2015-06-30 | Formation month |
-| PERMCO | 20436 | CRSP company ID |
-| SIC_REGION | D_Manufacturing | Sector the stock is ranked within |
-| F_RULE_OF_40_RK | 0.31 | 81st percentile vs. Manufacturing peers |
-| F_CASH_ROA_RK | 0.27 | 77th percentile |
-| F_DELTA_GROSS_MARGIN_RK | 0.08 | 58th percentile |
-| F_OPERATING_LEVERAGE_RK | 0.12 | 62nd percentile |
-| F_CASH_CONVERSION_RK | 0.19 | 69th percentile |
-| F_INTERNAL_FINANCING_RK | 0.34 | 84th percentile |
-| F_NET_BUYBACK_RK | 0.22 | 72nd percentile |
-| F_MOM_12_2_RK | 0.15 | 65th percentile |
-| F_LOW_VOLATILITY_RK | 0.29 | 79th percentile |
-| FWD_12M_RET | 18.4% | Realized return over the next 12 months (not a model input) |
-| **ALPHA_TARGET** | **0.24** | **Label: 74th percentile of forward return within sector** |
+| Feature | Sector Percentile |
+|:---|---:|
+| Rule of 40 | 81st |
+| Cash ROA | 77th |
+| Δ Gross Margin | 58th |
+| Operating Leverage | 62nd |
+| Cash Conversion | 69th |
+| Internal Financing | 84th |
+| Net Buyback | 72nd |
+| Momentum (12-2) | 65th |
+| Low Volatility | 79th |
+| **Target: Forward 12M Return** | **74th** |
+
+*Example training row: a Manufacturing stock in June 2015. Each feature is ranked against same-sector peers that month; the model learns to predict the stock's forward-return percentile from its feature percentiles.*
 
 **Model Training**
 A new model for built for each sector each January. The latest training example had its target return period end 1 month before January. 
