@@ -31,6 +31,8 @@ Here are the features chosen.
 | Net Buyback |
 | Momentum (12-2) |
 | Low Volatility |
+
+
 To prevent lookahead bias, when we are predicting the return from T to T+12 months, we use the report from a fiscal year that ended at before T-3, and the one before that, because companies take <90 days (mandated by the SEC) to release their reports after fiscal year end. 
 
 
