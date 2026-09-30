@@ -2,14 +2,16 @@
 ALL-SIC REGION RIDGE RANK-OPTIMIZATION ENGINE, VECTORIZED BACKTEST & ANALYTICS SUITE
 ====================================================================================
 - Model: Ridge Regression with High-Penalty Shrinkage (alpha=5000.0) per SIC Region.
+- Portfolio: ONCE A YEAR (end of December) the model is refit, every stock is scored, and
+  each quintile is bought equal-weight and held untouched for 12 months (Jan-Dec). Repeat.
 - Delisting & Rebalancing Policy:
     1. No -35% penalty imputation; uses CRSP DelRet if present, else 0.0.
-    2. If a stock delists inside the 12-month holding window, it drops out after its
-       terminal month and remaining capital is automatically equal-weighted into
-       the surviving names of that sleeve.
-    3. Look-Ahead Bias Eliminated: ALPHA_TARGET NaNs dropped only for model fitting,
-       while scoring operates on all active stocks alive at formation date T.
-    4. Vectorized 12-month overlapping sleeve backtest with 15 bps slippage.
+    2. If a stock delists during the year, its final value is spread across the
+       surviving names in proportion to their value (no other trading during the year).
+    3. Look-Ahead Bias Eliminated: the model only trains on rows whose 12M outcome was
+       fully known at the rebalance date; scoring uses all stocks alive on that date.
+    4. 15 bps one-way cost on the annual buy and the annual sell.
+    5. Q1-Q5 spread is charged trading costs on BOTH legs.
 
 - Analytics (all written to OUTPUT_DIR, ready to commit to GitHub):
     * Console table of returns + Sharpe (and ~20 more stats) for every bucket
@@ -20,7 +22,7 @@ ALL-SIC REGION RIDGE RANK-OPTIMIZATION ENGINE, VECTORIZED BACKTEST & ANALYTICS S
     * Ridge coefficient stability across refits and regions
     * Calendar-year, decade, and up/down-market breakdowns
     * Transaction-cost sensitivity (analytic, no re-simulation)
-    * Signal churn, basket breadth, sector composition of the long leg
+    * Year-over-year turnover, basket breadth, sector composition of the long leg
     * ~14 publication-quality PNG charts + README.md report with embedded tables
 """
 
@@ -61,6 +63,7 @@ FILING_LAG_DAYS = 90
 STALE_TOLERANCE_DAYS = 400
 
 FORWARD_HORIZON = 12
+REBALANCE_MONTH = 12           # form portfolios at December month-end -> hold Jan..Dec
 EMBARGO_MONTHS = 13
 MIN_TRAIN_MONTHS = 60
 TRAIN_WINDOW_MONTHS = 120
@@ -355,82 +358,65 @@ def build_multi_sic_dataset(link_clean):
 
     universe['ALPHA_TARGET'] = universe.groupby(['MTHCALDT', 'SIC_REGION'])['FWD_12M_RET'].rank(pct=True) - 0.5
 
-    agg_benchmark = universe.groupby('MTHCALDT')['MTHRET'].mean().sort_index().rename('AGGREGATE_BENCHMARK_RET')
-
     # Return universe without dropping ALPHA_TARGET NaN so scoring sees all alive stocks
-    return universe, m_prices, agg_benchmark, rank_cols
+    return universe, m_prices, rank_cols
 
 # ----------------------------------------------------------------------------
-# 5. WALK-FORWARD RIDGE MODEL PER SIC REGION (NO LOOK-AHEAD)
+# 5. WALK-FORWARD RIDGE MODEL PER SIC REGION (ONCE A YEAR, NO LOOK-AHEAD)
 # ----------------------------------------------------------------------------
 def run_all_regions_ridge(dataset, rank_cols):
-    print("[3/6] Starting multi-region Ridge training and prediction loop...")
-    all_predictions = []
-    coef_log = []                      # NEW: record every refit's coefficients
+    """Once a year (at the end of REBALANCE_MONTH) each region's Ridge model is refit
+    on data whose 12M outcome is fully known, then used to score every live stock."""
+    print("[3/6] Annual Ridge refit + scoring per SIC region...")
+    all_predictions, coef_log = [], []
     regions = sorted(dataset['SIC_REGION'].unique())
 
     for idx, reg in enumerate(regions, 1):
-        print(f"\n---> [{idx}/{len(regions)}] Training Ridge Engine for Region: {reg}")
-        sub_df = dataset[dataset['SIC_REGION'] == reg].copy()
+        sub_df = dataset[dataset['SIC_REGION'] == reg]
         dates = np.sort(sub_df['MTHCALDT'].unique())
-        start_idx = MIN_TRAIN_MONTHS
-
-        if len(dates) <= start_idx:
-            print(f"      [SKIP] Insufficient monthly observations ({len(dates)}) for {reg}.")
+        if len(dates) <= MIN_TRAIN_MONTHS:
+            print(f"  [{idx}/{len(regions)}] {reg}: skipped (only {len(dates)} months of data)")
             continue
 
-        current_model = None
-        last_refit_year = None
-        trained_refits = 0
+        # Formation dates: one per year, after the minimum history requirement
+        form_dates = [d for d in dates[MIN_TRAIN_MONTHS:] if pd.Timestamp(d).month == REBALANCE_MONTH]
         reg_preds = []
 
-        for t_idx in range(start_idx, len(dates)):
-            pred_date = dates[t_idx]
-            pred_dt = pd.Timestamp(pred_date)
+        for form_date in form_dates:
+            form_dt = pd.Timestamp(form_date)
 
-            # Annual Walk-Forward Refit with 13M Embargo
-            if (last_refit_year != pred_dt.year) or (current_model is None):
-                train_cutoff = pred_dt - pd.DateOffset(months=EMBARGO_MONTHS)
-                train_start = train_cutoff - pd.DateOffset(months=TRAIN_WINDOW_MONTHS)
+            # Train only on rows whose forward 12M return had fully played out by form_dt
+            train_cutoff = form_dt - pd.DateOffset(months=EMBARGO_MONTHS)
+            train_start = train_cutoff - pd.DateOffset(months=TRAIN_WINDOW_MONTHS)
+            train_pool = sub_df[(sub_df['MTHCALDT'] >= train_start) &
+                                (sub_df['MTHCALDT'] <= train_cutoff)].dropna(subset=rank_cols + ['ALPHA_TARGET'])
+            if len(train_pool) < 150:
+                continue
 
-                # Training pool: Drop missing forward targets ONLY here
-                train_pool = sub_df[
-                    (sub_df['MTHCALDT'] >= train_start) &
-                    (sub_df['MTHCALDT'] <= train_cutoff)
-                ].dropna(subset=rank_cols + ['ALPHA_TARGET'])
+            model = Ridge(alpha=RIDGE_ALPHA, fit_intercept=False, random_state=42)
+            model.fit(train_pool[rank_cols].values, train_pool['ALPHA_TARGET'].values)
+            coef_log.append({'SIC_REGION': reg, 'REFIT_DATE': form_dt, 'N_TRAIN': len(train_pool),
+                             **dict(zip(FEATURE_COLS, model.coef_))})
 
-                if len(train_pool) >= 150:
-                    X_train = train_pool[rank_cols].values
-                    y_train = train_pool['ALPHA_TARGET'].values
-
-                    current_model = Ridge(alpha=RIDGE_ALPHA, fit_intercept=False, random_state=42)
-                    current_model.fit(X_train, y_train)
-                    last_refit_year = pred_dt.year
-                    trained_refits += 1
-                    coef_log.append({'SIC_REGION': reg, 'REFIT_DATE': pred_dt, 'N_TRAIN': len(train_pool),
-                                     **dict(zip(FEATURE_COLS, current_model.coef_))})
-
-            # Scoring pool: All active candidates on this date (no target requirement)
-            test_candidates = sub_df[sub_df['MTHCALDT'] == pred_date].dropna(subset=rank_cols).copy()
-            if current_model is not None and len(test_candidates) >= 10:
-                X_test = test_candidates[rank_cols].values
-                test_candidates['ALPHA_SCORE'] = current_model.predict(X_test)
-                reg_preds.append(test_candidates[['MTHCALDT', 'PERMCO', 'SIC_REGION', 'ALPHA_SCORE']])
+            # Score every stock alive on the formation date (no target required)
+            live = sub_df[sub_df['MTHCALDT'] == form_date].dropna(subset=rank_cols).copy()
+            if len(live) >= 10:
+                live['ALPHA_SCORE'] = model.predict(live[rank_cols].values)
+                reg_preds.append(live[['MTHCALDT', 'PERMCO', 'SIC_REGION', 'ALPHA_SCORE']])
 
         if reg_preds:
             reg_out = pd.concat(reg_preds, ignore_index=True)
             all_predictions.append(reg_out)
-            print(f"      [SUCCESS] Generated {len(reg_out):,} out-of-sample predictions across {trained_refits} annual refits.")
+            print(f"  [{idx}/{len(regions)}] {reg}: {len(reg_preds)} annual portfolios, {len(reg_out):,} stock-years scored")
         else:
-            print(f"      [NOTICE] Insufficient cross-sectional density for {reg}.")
+            print(f"  [{idx}/{len(regions)}] {reg}: not enough data to train")
 
     if not all_predictions:
         raise RuntimeError("No predictions could be generated across the SIC regions.")
 
     master_scored = pd.concat(all_predictions, ignore_index=True)
 
-    print("\n[4/6] Pooling regional predictions and creating aggregate monthly quintiles (Q1 to Q5)...")
-    # rank(method='first') makes qcut robust to tied scores (identical to original when no ties)
+    print("\n[4/6] Sorting all scored stocks into quintiles each year (Q1 = best)...")
     master_scored['QUINTILE'] = master_scored.groupby('MTHCALDT')['ALPHA_SCORE'].transform(
         lambda s: pd.qcut(s.rank(method='first'), q=5, labels=['Q5', 'Q4', 'Q3', 'Q2', 'Q1']).astype(object)
         if len(s) >= 25 else pd.Series(np.nan, index=s.index)
@@ -440,74 +426,74 @@ def run_all_regions_ridge(dataset, rank_cols):
     return master_scored, pd.DataFrame(coef_log)
 
 # ----------------------------------------------------------------------------
-# 6. FAST VECTORIZED 12-MONTH OVERLAPPING SLEEVE BACKTEST
+# 6. ANNUAL BUY-AND-HOLD BACKTEST
 # ----------------------------------------------------------------------------
-def run_quintile_backtest(scored_df, m_prices, agg_benchmark, slippage=SLIPPAGE_ONE_WAY):
-    """Returns (quintile_series @ `slippage`, benchmark, cost_engine).
-    cost_engine(slip) -> quintile_series at any other one-way cost, computed analytically
-    (sleeve mean is linear in the per-row cost), so no re-simulation is needed."""
-    print("      Simulating 12-month overlapping sleeves with survivor rebalancing...")
+def run_quintile_backtest(scored_df, m_prices, slippage=SLIPPAGE_ONE_WAY):
+    """Once a year: buy each quintile equal-weight, hold untouched for 12 months, sell, repeat.
+    - Weights drift with prices during the year (true buy-and-hold, no monthly rebalancing).
+    - A delisted stock's final value is spread across the survivors in proportion to their value.
+    - Costs: the whole book is bought at `slippage` in month 1 and sold at `slippage` in month 12.
+    - Benchmark: the same annual buy-and-hold applied to ALL scored stocks, before costs.
+    Returns (quintile_series, benchmark, cost_engine, turnover) where cost_engine(slip)
+    re-prices the quintiles at any other one-way cost without re-running the simulation."""
+    print("      Simulating annual buy-and-hold portfolios...")
     all_dates = np.sort(m_prices['MTHCALDT'].unique())
     date_to_idx = {d: i for i, d in enumerate(all_dates)}
-
-    holdings = scored_df[['MTHCALDT', 'PERMCO', 'QUINTILE']].copy()
-    holdings['START_IDX'] = holdings['MTHCALDT'].map(date_to_idx)
-
-    offsets = np.arange(1, FORWARD_HORIZON + 1)
-    holding_indices = holdings['START_IDX'].values[:, None] + offsets  # (N, 12)
     max_idx = len(all_dates) - 1
-    valid_mask = holding_indices <= max_idx
 
-    n_rows = len(holdings)
-    cohort_dates = np.repeat(holdings['MTHCALDT'].values, FORWARD_HORIZON)
-    permcos = np.repeat(holdings['PERMCO'].values, FORWARD_HORIZON)
-    quintiles = np.repeat(holdings['QUINTILE'].values, FORWARD_HORIZON)
-    flat_indices = np.clip(holding_indices.ravel(), 0, max_idx)
-    flat_offsets = np.tile(offsets, n_rows)
-    flat_valid = valid_mask.ravel()
+    h = scored_df[['MTHCALDT', 'PERMCO', 'QUINTILE']].copy()
+    h['START_IDX'] = h['MTHCALDT'].map(date_to_idx)
 
-    expanded = pd.DataFrame({
-        'COHORT': cohort_dates[flat_valid],
-        'HOLD_DT': all_dates[flat_indices[flat_valid]],
-        'PERMCO': permcos[flat_valid],
-        'QUINTILE': pd.Categorical(quintiles[flat_valid], categories=BUCKETS),
-        'OFFSET': flat_offsets[flat_valid].astype(np.int8)
+    # One row per (stock, holding month 1..12)
+    offsets = np.arange(1, FORWARD_HORIZON + 1)
+    idx = h['START_IDX'].values[:, None] + offsets
+    ok = (idx <= max_idx).ravel()
+    exp = pd.DataFrame({
+        'COHORT': np.repeat(h['MTHCALDT'].values, FORWARD_HORIZON)[ok],
+        'PERMCO': np.repeat(h['PERMCO'].values, FORWARD_HORIZON)[ok],
+        'QUINTILE': np.repeat(h['QUINTILE'].values, FORWARD_HORIZON)[ok],
+        'OFFSET': np.tile(offsets, len(h))[ok],
+        'HOLD_DT': all_dates[np.clip(idx.ravel(), 0, max_idx)][ok],
     })
+    px = m_prices[['PERMCO', 'MTHCALDT', 'MTHRET']].rename(columns={'MTHCALDT': 'HOLD_DT'})
+    exp = exp.merge(px, on=['PERMCO', 'HOLD_DT'], how='inner')   # delisted stocks drop out
 
-    px_simple = m_prices[['PERMCO', 'MTHCALDT', 'MTHRET']].rename(columns={'MTHCALDT': 'HOLD_DT'})
+    # Buy-and-hold weight = value of $1 invested at formation, as of the start of each month
+    exp = exp.sort_values(['COHORT', 'QUINTILE', 'PERMCO', 'OFFSET'])
+    growth = (1 + exp['MTHRET']).groupby([exp['COHORT'], exp['QUINTILE'], exp['PERMCO']]).cumprod()
+    exp['W'] = (growth / (1 + exp['MTHRET'])).values
+    exp['WR'] = exp['W'] * exp['MTHRET']
 
-    # Inner join automatically keeps a stock only for months it actively traded.
-    # When a stock delists, it contributes its final month's return and drops out.
-    expanded = expanded.merge(px_simple, on=['PERMCO', 'HOLD_DT'], how='inner')
+    def portfolio_returns(df):
+        g = df.groupby(['HOLD_DT'])[['WR', 'W']].sum()
+        return (g['WR'] / g['W']).sort_index()
 
-    # Number of one-way trades charged on each row: entry (OFFSET==1) + exit (last traded month)
-    max_offset_per_pick = expanded.groupby(['COHORT', 'PERMCO'])['OFFSET'].transform('max')
-    expanded['N_TRADES'] = (expanded['OFFSET'] == 1).astype(np.int8) + \
-                           (expanded['OFFSET'] == max_offset_per_pick).astype(np.int8)
+    gross = {q: portfolio_returns(exp[exp['QUINTILE'] == q]) for q in BUCKETS}
+    benchmark = portfolio_returns(exp).rename('BENCH')
 
-    # Mean over active names dynamically rebalances proceeds to remaining survivors.
-    sleeve = expanded.groupby(['QUINTILE', 'COHORT', 'HOLD_DT'], observed=True)[['MTHRET', 'N_TRADES']].mean().reset_index()
-    # Average across all concurrent active sleeves on each calendar month (gross + trade intensity)
-    q_gross = sleeve.groupby(['QUINTILE', 'HOLD_DT'], observed=True)[['MTHRET', 'N_TRADES']].mean()
-
-    common_idx = agg_benchmark.index
+    common = benchmark.index
     for q in BUCKETS:
-        common_idx = common_idx.intersection(q_gross.loc[q].index)
-    common_idx = common_idx.sort_values()
-    benchmark_series = agg_benchmark.loc[common_idx]
+        common = common.intersection(gross[q].index)
+    common = common.sort_values()
+    benchmark = benchmark.loc[common]
+
+    # Month-in-holding-year for each calendar month (1 = buy month, 12 = sell month)
+    hold_month = exp.groupby('HOLD_DT')['OFFSET'].max().reindex(common)
+    trades = ((hold_month == 1).astype(int) + (hold_month == FORWARD_HORIZON).astype(int))
 
     def cost_engine(slip):
-        out = {}
-        for q in BUCKETS:
-            sub = q_gross.loc[q].loc[common_idx]
-            out[q] = (sub['MTHRET'] - slip * sub['N_TRADES']).rename(q)
-        # Long/short pays costs on BOTH legs (shorting Q5 is not a cost rebate):
-        g1, g5 = q_gross.loc['Q1'].loc[common_idx], q_gross.loc['Q5'].loc[common_idx]
-        out['Q1_minus_Q5'] = ((g1['MTHRET'] - g5['MTHRET']) - slip * (g1['N_TRADES'] + g5['N_TRADES'])).rename('Q1_minus_Q5')
+        out = {q: (gross[q].loc[common] - slip * trades).rename(q) for q in BUCKETS}
+        # Long/short pays costs on BOTH legs
+        out['Q1_minus_Q5'] = (gross['Q1'].loc[common] - gross['Q5'].loc[common] - 2 * slip * trades).rename('Q1_minus_Q5')
         return out
 
-    trade_intensity = pd.DataFrame({q: q_gross.loc[q].loc[common_idx, 'N_TRADES'] for q in BUCKETS})
-    return cost_engine(slippage), benchmark_series, cost_engine, trade_intensity
+    # Turnover: share of each quintile that is new vs. last year's picks
+    turnover = {}
+    for q in ['Q1', 'Q5']:
+        sets = scored_df[scored_df['QUINTILE'] == q].groupby('MTHCALDT')['PERMCO'].apply(set).sort_index()
+        turnover[q] = pd.Series([np.nan] + [1 - len(sets.iloc[i] & sets.iloc[i - 1]) / max(len(sets.iloc[i]), 1)
+                                            for i in range(1, len(sets))], index=sets.index)
+    return cost_engine(slippage), benchmark, cost_engine, pd.DataFrame(turnover)
 
 # ----------------------------------------------------------------------------
 # 7. PERFORMANCE ANALYTICS
@@ -705,9 +691,12 @@ def _xs_spearman(df, a, b, by, min_n=20):
     return d.groupby(by)[['_ra', '_rb']].apply(lambda g: g['_ra'].corr(g['_rb']))
 
 def ic_summary(ic):
+    """One IC per year; the 12M windows don't overlap, so a plain t-stat is valid."""
     ic = ic.dropna()
-    return {'Mean IC': ic.mean(), 'IC Std': ic.std(), 'ICIR (ann.)': ic.mean() / ic.std() * np.sqrt(12),
-            'IC > 0 (%)': (ic > 0).mean(), 'NW t (12 lags)': newey_west_tstat(ic, NW_LAGS), 'Months': int(len(ic))}
+    sd = ic.std()
+    return {'Mean IC': ic.mean(), 'IC Std': sd, 'ICIR': ic.mean() / sd if sd > 0 else np.nan,
+            'IC > 0 (%)': (ic > 0).mean(), 't-stat': ic.mean() / sd * np.sqrt(len(ic)) if sd > 0 else np.nan,
+            'Years': int(len(ic))}
 
 def signal_analytics(master_scored, universe, rank_cols):
     print("      Computing rank ICs (model, per-region, per-feature)...")
@@ -732,14 +721,6 @@ def signal_analytics(master_scored, universe, rank_cols):
     feat_corr = sc[rank_cols].corr()
     feat_corr.index = feat_corr.columns = FEATURE_COLS
 
-    # Signal churn: fraction of the bucket replaced vs. previous formation month
-    churn = {}
-    for q in ['Q1', 'Q5']:
-        sets = master_scored[master_scored['QUINTILE'] == q].groupby('MTHCALDT')['PERMCO'].apply(set).sort_index()
-        vals = [np.nan] + [1 - len(sets.iloc[i] & sets.iloc[i - 1]) / max(len(sets.iloc[i]), 1) for i in range(1, len(sets))]
-        churn[q] = pd.Series(vals, index=sets.index)
-    churn = pd.DataFrame(churn)
-
     breadth = master_scored.groupby(['MTHCALDT', 'QUINTILE']).size().unstack()[BUCKETS]
 
     comp = master_scored.groupby(['MTHCALDT', 'QUINTILE', 'SIC_REGION']).size()
@@ -752,7 +733,7 @@ def signal_analytics(master_scored, universe, rank_cols):
     tilt = tilt.sort_values('Active tilt', ascending=False)
 
     return dict(ic=ic, ic_tbl=ic_tbl, reg_tbl=reg_tbl, feat_tbl=feat_tbl, feat_ic=feat_ic_series,
-                feat_corr=feat_corr, churn=churn, breadth=breadth, q1_comp=q1_comp, tilt=tilt)
+                feat_corr=feat_corr, breadth=breadth, q1_comp=q1_comp, tilt=tilt)
 
 def factor_regression_table(q_series, benchmark, factors):
     if factors is None:
@@ -814,14 +795,14 @@ def print_df(df, title, fmt=None):
     with pd.option_context('display.width', 200, 'display.max_columns', 50):
         d = df.copy()
         for c in d.columns:
-            if str(c) in ('Months', 'N', 'Peak->Trough (m)', 'Total Length (m)'):
+            if str(c) in ('Months', 'Years', 'N', 'Peak->Trough (m)', 'Total Length (m)'):
                 d[c] = d[c].astype('Int64')
         print(d.to_string(float_format=fmt or (lambda v: f'{v:,.4f}')))
 
 # ----------------------------------------------------------------------------
 # 10. MARKDOWN WRITER (no tabulate dependency)
 # ----------------------------------------------------------------------------
-PCT_COLS = {'Ann. Return', 'CAGR', 'Ann. Vol', 'Max DD', 'Hit Rate', 'Best Month', 'Worst Month',
+PCT_COLS = {'Q1 turnover', 'Ann. Return', 'CAGR', 'Ann. Vol', 'Max DD', 'Hit Rate', 'Best Month', 'Worst Month',
             'VaR 95% (m)', 'CVaR 95% (m)', 'Alpha (ann.)', 'Tracking Error', 'Prob. Sharpe > 0',
             'Q1 weight', 'Universe weight', 'Active tilt', 'IC > 0 (%)', 'Depth',
             'Q1 Ann. Ret', 'Q1 - Bench (ann.)', 'L/S Ann. Ret'}
@@ -834,7 +815,7 @@ def fmt_cell(col, v):
     c = str(col)
     if c in PCT_COLS or c.endswith(' Ret') or c in BUCKETS + ['Bench', 'Q1-Q5']:
         return f'{v:.2%}'
-    if c in ('Months', 'Longest DD (m)', 'N', 'Peak->Trough (m)', 'Total Length (m)') or (float(v).is_integer() and abs(v) > 100):
+    if c in ('Months', 'Years', 'Longest DD (m)', 'N', 'Peak->Trough (m)', 'Total Length (m)') or (float(v).is_integer() and abs(v) > 100):
         return f'{int(v):,}'
     return f'{v:.2f}' if abs(v) >= 0.01 or v == 0 else f'{v:.4f}'
 
@@ -877,7 +858,7 @@ def _save(fig, name, figdir):
     plt.close(fig)
     return path
 
-def make_charts(q_series, benchmark, stats_tbl, sig, coefs, cal, cost_tbl, figdir):
+def make_charts(q_series, benchmark, stats_tbl, sig, coefs, cal, cost_tbl, turnover, figdir):
     _style()
     figs = {}
     pct = PercentFormatter(1.0, decimals=0)
@@ -902,7 +883,7 @@ def make_charts(q_series, benchmark, stats_tbl, sig, coefs, cal, cost_tbl, figdi
     ax.plot(bc.index, bc.values, color=C_BENCH, ls='--', lw=1.4, label=BUCKET_LABELS['BENCH'])
     ax.set_yscale('log')
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'${v:,.0f}' if v >= 1 else f'${v:.2f}'))
-    ax.set_title('Growth of $1 by model quintile (log scale, net of 15 bps one-way costs)')
+    ax.set_title('Growth of $1 by model quintile (annual rebalance, log scale, net of 15 bps one-way costs)')
     ax.legend(loc='upper left', ncol=2, fontsize=9)
     figs['growth'] = _save(fig, '01_growth_of_1_quintiles.png', figdir)
 
@@ -1012,8 +993,8 @@ def make_charts(q_series, benchmark, stats_tbl, sig, coefs, cal, cost_tbl, figdi
     # 9) Rolling IC
     ic = sig['ic']
     fig, ax = plt.subplots(figsize=(11, 4.2))
-    ax.bar(ic.index, ic.values, width=25, color='#b7d3f6', label='Monthly rank IC')
-    ax.plot(ic.index, ic.rolling(12).mean(), color='#184f95', lw=2, label='12-month average')
+    ax.bar(ic.index, ic.values, width=250, color='#6da7ec', label='Rank IC (each annual portfolio)')
+    ax.plot(ic.index, ic.rolling(5, min_periods=3).mean(), color='#184f95', lw=2, label='5-year average')
     ax.axhline(ic.mean(), color=C_ACCENT, lw=1.2, ls='--', label=f'Mean IC {ic.mean():.3f}')
     ax.axhline(0, color='#b5b4ae', lw=1)
     ax.set_title('Information coefficient: Spearman(score, forward 12M return)')
@@ -1025,7 +1006,7 @@ def make_charts(q_series, benchmark, stats_tbl, sig, coefs, cal, cost_tbl, figdi
     fig, ax = plt.subplots(figsize=(9, 4.6))
     cols = ['#2a78d6' if v >= 0 else '#e34948' for v in ft['Mean IC']]
     ax.barh(ft.index, ft['Mean IC'], color=cols, height=0.6, edgecolor='white', linewidth=2)
-    for i, (v, t) in enumerate(zip(ft['Mean IC'], ft['NW t (12 lags)'])):
+    for i, (v, t) in enumerate(zip(ft['Mean IC'], ft['t-stat'])):
         ax.annotate(f'{v:.3f} (t={t:.1f})', (v, i), xytext=(4 if v >= 0 else -4, 0), textcoords='offset points',
                     va='center', ha='left' if v >= 0 else 'right', fontsize=8.5, color=INK2)
     ax.axvline(0, color='#b5b4ae', lw=1)
@@ -1096,18 +1077,18 @@ def make_charts(q_series, benchmark, stats_tbl, sig, coefs, cal, cost_tbl, figdi
     ax.legend(ncol=4, fontsize=8, loc='upper left', bbox_to_anchor=(0, -0.08))
     figs['composition'] = _save(fig, '14_long_leg_sector_composition.png', figdir)
 
-    # 15) Breadth and churn
+    # 15) Breadth and turnover
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
     br = sig['breadth']
     a1.plot(br.index, br['Q1'], color=QCOL['Q1'], lw=1.6, label='Names per quintile')
-    a1.set_title('Breadth: stocks per quintile at formation')
-    ch = sig['churn'].rolling(12).mean()
-    a2.plot(ch.index, ch['Q1'], color=QCOL['Q1'], lw=1.6, label='Q1')
-    a2.plot(ch.index, ch['Q5'], color=QCOL['Q5'], lw=1.6, label='Q5')
+    a1.set_title('Breadth: stocks per quintile at each annual rebalance')
+    a2.plot(turnover.index, turnover['Q1'], color=QCOL['Q1'], lw=1.6, marker='o', ms=4, label='Q1')
+    a2.plot(turnover.index, turnover['Q5'], color=QCOL['Q5'], lw=1.6, marker='o', ms=4, label='Q5')
+    a2.set_ylim(0, 1)
     a2.yaxis.set_major_formatter(pct)
-    a2.set_title('Signal churn: share of bucket replaced vs prior month (12M avg)')
+    a2.set_title("Turnover: share of this year's picks that are new vs last year")
     a2.legend(ncol=2)
-    figs['breadth'] = _save(fig, '15_breadth_and_churn.png', figdir)
+    figs['breadth'] = _save(fig, '15_breadth_and_turnover.png', figdir)
 
     # 16) Risk / return scatter
     fig, ax = plt.subplots(figsize=(7.5, 5.2))
@@ -1148,12 +1129,13 @@ def write_readme(path, sections, figs, figdir_rel):
         f'- **Features ({len(FEATURE_COLS)}):** ' + ', '.join(f'`{f}`' for f in FEATURE_COLS) +
         '; each converted to a cross-sectional percentile rank **within SIC division and month**.\n'
         f'- **Model:** one Ridge regression per SIC division (alpha = {RIDGE_ALPHA:,.0f}, no intercept), '
-        f'target = within-division rank of forward 12M return. Refit annually on a rolling {TRAIN_WINDOW_MONTHS}-month '
-        f'window with a {EMBARGO_MONTHS}-month embargo; first prediction after {MIN_TRAIN_MONTHS} months of history.\n'
-        '- **Portfolio:** pooled scores sorted into monthly quintiles (Q1 = highest). Each month opens a new equal-weight '
-        f'sleeve held {FORWARD_HORIZON} months (overlapping, Jegadeesh-Titman style). Delisted names drop out, capital '
-        f're-spreads to survivors. CRSP delisting returns used where present.\n'
-        f'- **Costs:** {SLIPPAGE_ONE_WAY * 1e4:.0f} bps one-way on entry and exit. Benchmark = equal-weight universe.\n'
+        f'target = within-division rank of forward 12M return. Refit every December on a rolling {TRAIN_WINDOW_MONTHS}-month '
+        f'window, using only rows whose 12M outcome was already known ({EMBARGO_MONTHS}-month embargo); first prediction after {MIN_TRAIN_MONTHS} months of history.\n'
+        '- **Portfolio:** once a year (end of December) every stock is scored and sorted into quintiles (Q1 = highest). '
+        'Each quintile is bought equal-weight and held untouched for 12 months, then the process repeats. '
+        'Delisted stocks drop out and their value is spread across the survivors. CRSP delisting returns used where present.\n'
+        f'- **Costs:** {SLIPPAGE_ONE_WAY * 1e4:.0f} bps one-way on the annual buy and sell. '
+        'Benchmark = the same annual equal-weight buy-and-hold of all scored stocks, before costs.\n'
         f"- **Risk-free:** {s['rf_note']}\n")
     md.append('## Performance by quintile (full sample)\n')
     md.append(df_to_md(s['main_short'], 'Bucket') + '\n')
@@ -1179,7 +1161,7 @@ def write_readme(path, sections, figs, figdir_rel):
         md.append(df_to_md(s['ff'], 'Bucket') + '\n')
     md.append('## Signal quality\n')
     md.append('### Rank information coefficient (score vs. realised forward 12M return)\n')
-    md.append('Overlapping 12M targets are serially correlated, so t-stats use Newey-West with 12 lags.\n\n')
+    md.append('One IC per annual portfolio; the 12-month windows do not overlap, so these are independent observations.\n\n')
     md.append(df_to_md(s['ic_tbl'], 'Signal') + '\n')
     md.append(img('ic', 'Rank IC'))
     md.append('### IC by SIC division\n')
@@ -1207,12 +1189,12 @@ def write_readme(path, sections, figs, figdir_rel):
     md.append('### Long-leg sector tilt vs scored universe\n')
     md.append(df_to_md(s['tilt'], 'SIC division') + '\n')
     md.append(img('composition', 'Sector composition'))
-    md.append(img('breadth', 'Breadth and churn'))
+    md.append(img('breadth', 'Breadth and turnover'))
     md.append('\n---\n*Backtest results are hypothetical, computed on historical data, and do not represent live trading.*\n')
     with open(path, 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(md))
 
-def report(q_series, benchmark, cost_engine, trade_intensity, master_scored, universe, rank_cols, coefs):
+def report(q_series, benchmark, cost_engine, turnover, master_scored, universe, rank_cols, coefs):
     print("\n[5/6] Generating statistical report...")
     tabdir = os.path.join(OUTPUT_DIR, 'tables')
     figdir = os.path.join(OUTPUT_DIR, 'figures')
@@ -1264,8 +1246,8 @@ def report(q_series, benchmark, cost_engine, trade_intensity, master_scored, uni
     print_df(sig['tilt'], 'LONG-LEG SECTOR TILT vs SCORED UNIVERSE', pf)
     if ff is not None:
         print_df(ff, 'FAMA-FRENCH 5 + MOMENTUM ATTRIBUTION (NW t-stats)', pf)
-    print(f"\nAverage one-way trades per name per month (entry+exit intensity): "
-          f"{trade_intensity.mean().mean():.3f}  | Mean Q1 churn vs prior formation: {sig['churn']['Q1'].mean():.1%}")
+    print(f"\nAverage yearly turnover (share of picks that are new vs last year): "
+          f"Q1 {turnover['Q1'].mean():.1%} | Q5 {turnover['Q5'].mean():.1%}")
 
     # ---- Save CSVs
     main.to_csv(os.path.join(tabdir, 'performance_full_sample.csv'))
@@ -1277,7 +1259,7 @@ def report(q_series, benchmark, cost_engine, trade_intensity, master_scored, uni
     regime.to_csv(os.path.join(tabdir, 'market_regimes.csv'))
     cost_tbl.to_csv(os.path.join(tabdir, 'cost_sensitivity.csv'))
     dd_ls.to_csv(os.path.join(tabdir, 'long_short_drawdowns.csv'), index=False)
-    sig['ic'].rename('IC').to_csv(os.path.join(tabdir, 'monthly_rank_ic.csv'))
+    sig['ic'].rename('IC').to_csv(os.path.join(tabdir, 'annual_rank_ic.csv'))
     sig['ic_tbl'].to_csv(os.path.join(tabdir, 'ic_summary.csv'))
     sig['reg_tbl'].to_csv(os.path.join(tabdir, 'ic_by_region.csv'))
     sig['feat_tbl'].to_csv(os.path.join(tabdir, 'ic_by_feature.csv'))
@@ -1292,7 +1274,8 @@ def report(q_series, benchmark, cost_engine, trade_intensity, master_scored, uni
 
     # ---- Charts
     print("\n[6/6] Rendering charts and writing README report...")
-    figs = make_charts(q_series, benchmark, main, sig, coefs, cal, cost_tbl, figdir)
+    figs = make_charts(q_series, benchmark, main, sig, coefs, cal, cost_tbl, turnover, figdir)
+    turnover.to_csv(os.path.join(tabdir, 'yearly_turnover.csv'))
 
     # ---- README
     short_cols = ['Ann. Return', 'CAGR', 'Ann. Vol', 'Sharpe', 'Sortino', 'Max DD', 'Calmar', 'Hit Rate',
@@ -1306,7 +1289,7 @@ def report(q_series, benchmark, cost_engine, trade_intensity, master_scored, uni
         f"| Sharpe ratio | {q1_row['Sharpe']:.2f} | {b_row['Sharpe']:.2f} | {ls_row['Sharpe']:.2f} |\n"
         f"| Max drawdown | {q1_row['Max DD']:.1%} | {b_row['Max DD']:.1%} | {ls_row['Max DD']:.1%} |\n"
         f"| Newey-West t (mean) | {q1_row['NW t(mean)']:.2f} | {b_row['NW t(mean)']:.2f} | {ls_row['NW t(mean)']:.2f} |\n"
-        f"| Mean rank IC | | | {sig['ic_tbl'].iloc[0]['Mean IC']:.3f} (ICIR {sig['ic_tbl'].iloc[0]['ICIR (ann.)']:.2f}) |\n")
+        f"| Mean rank IC | | | {sig['ic_tbl'].iloc[0]['Mean IC']:.3f} (t = {sig['ic_tbl'].iloc[0]['t-stat']:.2f}) |\n")
     sections = dict(
         start=f'{benchmark.index[0]:%Y-%m}', end=f'{benchmark.index[-1]:%Y-%m}', months=len(benchmark),
         headline=headline, rf_note=rf_note,
@@ -1339,9 +1322,8 @@ if __name__ == '__main__':
     if not SHOW_PLOTS:
         matplotlib.use('Agg')
     link_clean = load_clean_link()
-    universe, m_prices, agg_benchmark, rank_cols = build_multi_sic_dataset(link_clean)
+    universe, m_prices, rank_cols = build_multi_sic_dataset(link_clean)
     master_scored, coefs = run_all_regions_ridge(universe, rank_cols)
-    quintile_series, benchmark_series, cost_engine, trade_intensity = run_quintile_backtest(
-        master_scored, m_prices, agg_benchmark)
-    report(quintile_series, benchmark_series, cost_engine, trade_intensity,
+    quintile_series, benchmark_series, cost_engine, turnover = run_quintile_backtest(master_scored, m_prices)
+    report(quintile_series, benchmark_series, cost_engine, turnover,
            master_scored, universe, rank_cols, coefs)
